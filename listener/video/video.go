@@ -2,13 +2,13 @@ package video
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	proxy "github.com/thinkonmay/thinkremote-rtchub"
 	"github.com/thinkonmay/thinkremote-rtchub/listener"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/multiplexer"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/h264"
@@ -27,7 +27,7 @@ type VideoPipeline struct {
 	Multiplexer *multiplexer.Multiplexer
 }
 
-func CreatePipeline(queue *proxy.Queue) (listener.Listener,
+func CreatePipeline() (listener.Listener,
 	error) {
 
 	pipeline := &VideoPipeline{
@@ -40,21 +40,23 @@ func CreatePipeline(queue *proxy.Queue) (listener.Listener,
 		Multiplexer: multiplexer.NewMultiplexer("video", h264.NewH264Payloader()),
 	}
 
-	buffer := make([]byte, 1024*1024) //1MB
-	local_index := queue.CurrentIndex()
+	pc, err := net.ListenPacket("udp", ":63400")
+	if err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, 1024*1024*10)
 	firsttime := true
+
+	start := time.Now().UnixNano()
 	thread.HighPriorityLoop(pipeline.closed, func() {
-		for local_index >= queue.CurrentIndex() {
-			time.Sleep(time.Microsecond * 100)
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			panic(err)
 		}
 
-		local_index++
-		if size, duration := queue.Copy(buffer, local_index); size > len(buffer) {
-		} else {
-			pipeline.Multiplexer.Send(buffer[:size], uint32(time.Duration(duration).Seconds()*pipeline.clockRate))
-		}
-
-
+		pipeline.Multiplexer.Send(buf[:n], uint32(time.Duration(time.Now().UnixNano()-start).Seconds()*pipeline.clockRate))
+		start = time.Now().UnixNano()
 		if firsttime {
 			fmt.Println("capturing video")
 			firsttime = false
