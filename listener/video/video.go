@@ -6,12 +6,14 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pion/randutil"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	proxy "github.com/thinkonmay/thinkremote-rtchub"
 	"github.com/thinkonmay/thinkremote-rtchub/listener"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/multiplexer"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/h264"
+	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/wrapper"
 	"github.com/thinkonmay/thinkremote-rtchub/util/thread"
 )
 
@@ -36,8 +38,12 @@ func CreatePipeline(queue *proxy.Queue) (listener.Listener,
 		mut:      &sync.Mutex{},
 		codec:    webrtc.MimeTypeH264,
 
-		clockRate:   90000,
-		Multiplexer: multiplexer.NewMultiplexer("video", h264.NewH264Payloader()),
+		clockRate: 90000,
+		Multiplexer: multiplexer.NewMultiplexer("video", &wrapper.PacketizerWrapper{
+			Fun:       h264.RTPPay,
+			Timestamp: randutil.NewMathRandomGenerator().Uint32(),
+			MTU:       1400,
+		}),
 	}
 
 	buffer := make([]byte, 1024*1024) //1MB
@@ -53,7 +59,6 @@ func CreatePipeline(queue *proxy.Queue) (listener.Listener,
 		} else {
 			pipeline.Multiplexer.Send(buffer[:size], uint32(time.Duration(duration).Seconds()*pipeline.clockRate))
 		}
-
 
 		if firsttime {
 			fmt.Println("capturing video")
