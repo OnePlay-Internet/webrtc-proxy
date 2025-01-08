@@ -1,11 +1,6 @@
 package config
 
-import (
-	"github.com/pion/webrtc/v4"
-)
-
 type WebRTCConfig struct {
-	Ices []webrtc.ICEServer `json:"iceServers"`
 }
 
 type WebsocketConfig struct {

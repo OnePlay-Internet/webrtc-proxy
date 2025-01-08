@@ -16,6 +16,7 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hajimehoshi/oto v0.7.1 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/pion/dtls/v3 v3.0.2 // indirect

@@ -9,14 +9,11 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	proxy "github.com/thinkonmay/thinkremote-rtchub"
-
-	"github.com/thinkonmay/thinkremote-rtchub/datachannel"
-	"github.com/thinkonmay/thinkremote-rtchub/datachannel/hid"
+	"github.com/thinkonmay/thinkremote-rtchub/hid"
 	"github.com/thinkonmay/thinkremote-rtchub/listener"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/audio"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/manual"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/video"
-	"github.com/thinkonmay/thinkremote-rtchub/signalling/http"
 	"github.com/thinkonmay/thinkremote-rtchub/util/config"
 	"github.com/thinkonmay/thinkremote-rtchub/util/thread"
 )
