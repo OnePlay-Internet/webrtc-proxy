@@ -18,8 +18,6 @@ type sample struct {
 	id      int
 }
 type Multiplexer struct {
-	id string
-
 	packetizer rtppay.Packetizer
 
 	mutex   *sync.Mutex
@@ -33,9 +31,8 @@ type Handler struct {
 	stop    chan bool
 }
 
-func NewMultiplexer(id string, packetizer rtppay.Packetizer) *Multiplexer {
+func NewMultiplexer(packetizer rtppay.Packetizer) *Multiplexer {
 	ret := &Multiplexer{
-		id:         id,
 		mutex:      &sync.Mutex{},
 		queue:      make(chan *sample, queue_size),
 		handler:    map[string]*Handler{},

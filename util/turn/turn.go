@@ -1,11 +1,9 @@
 package turn
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -81,61 +79,6 @@ func NewTurnServer(config TurnServerConfig) (*TurnServer, error) {
 		}
 	})
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/open", func(w http.ResponseWriter, r *http.Request) {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(400)
-			w.Write([]byte(err.Error()))
-		}
-
-		body := TurnRequest{}
-		if err := json.Unmarshal(data, &body); err != nil {
-			w.WriteHeader(400)
-			w.Write([]byte(err.Error()))
-			return
-		}
-
-		server.mut.Lock()
-		defer server.mut.Unlock()
-
-		fmt.Printf("Started a new turn server %v\n", body)
-		server.sessions[body.Username] = turn.GenerateAuthKey(body.Username, realm, body.Password)
-
-		w.WriteHeader(200)
-		w.Write([]byte("success"))
-	})
-
-	mux.HandleFunc("/close", func(w http.ResponseWriter, r *http.Request) {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(400)
-			w.Write([]byte(err.Error()))
-			return
-		}
-
-		body := struct {
-			Username string `json:"username"`
-		}{}
-		if err := json.Unmarshal(data, &body); err != nil {
-			w.WriteHeader(400)
-			w.Write([]byte(err.Error()))
-			return
-		}
-
-		server.mut.Lock()
-		defer server.mut.Unlock()
-
-		if _, ok := server.sessions[body.Username]; ok {
-			delete(server.sessions, body.Username)
-			w.WriteHeader(200)
-			w.Write([]byte("success"))
-		} else {
-			w.WriteHeader(404)
-			w.Write([]byte(fmt.Sprintf("username %s not found", body.Username)))
-		}
-	})
-
 	if packetConnConfigs, err := PacketConfig(config.PublicIP, config.Port); err != nil {
 		return nil, err
 	} else if server.turn, err = turn.NewServer(turn.ServerConfig{
@@ -153,61 +96,27 @@ func NewTurnServer(config TurnServerConfig) (*TurnServer, error) {
 	}); err != nil {
 		return nil, err
 	} else {
-		server.Mux = mux
 		return server, nil
 	}
 }
 
-type TurnClient struct {
-	Addr string
-}
+func (server *TurnServer) Open(body TurnRequest) error {
+	server.mut.Lock()
+	defer server.mut.Unlock()
 
-func (client *TurnClient) Open(req TurnRequest) error {
-	data, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.Post(
-		fmt.Sprintf("http://%s/open", client.Addr),
-		"application/json",
-		bytes.NewReader(data))
-	if err != nil {
-		return err
-	} else if resp.StatusCode != 200 {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-
-		return fmt.Errorf("%s", string(body))
-	}
-
+	fmt.Printf("Started a new turn server %v\n", body)
+	server.sessions[body.Username] = turn.GenerateAuthKey(body.Username, realm, body.Password)
 	return nil
 }
 
-func (client *TurnClient) Close(username string) error {
-	data, err := json.Marshal(TurnRequest{
-		Username: username,
-	})
-	if err != nil {
-		return err
+func (server *TurnServer) Close(username string) error {
+	server.mut.Lock()
+	defer server.mut.Unlock()
+
+	if _, ok := server.sessions[username]; ok {
+		delete(server.sessions, username)
+		return nil
+	} else {
+		return fmt.Errorf("turn session not found %s", username)
 	}
-
-	resp, err := http.Post(
-		fmt.Sprintf("http://%s/close", client.Addr),
-		"application/json",
-		bytes.NewReader(data))
-	if err != nil {
-		return err
-	} else if resp.StatusCode != 200 {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-
-		return fmt.Errorf("%s", string(body))
-	}
-
-	return nil
 }

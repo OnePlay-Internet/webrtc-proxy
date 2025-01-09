@@ -13,9 +13,9 @@ import (
 )
 
 type WebRTCClient struct {
-	conn       *webrtc.PeerConnection
-	IDRhandler func()
-	stop       chan bool
+	conn *webrtc.PeerConnection
+	idr  func()
+	stop chan bool
 }
 
 type WebRTCConfig struct {
@@ -26,7 +26,7 @@ type WebRTCConfig struct {
 
 type SignalingMessage struct {
 	Event string
-	Data  string
+	Data  interface{}
 }
 
 type SignalingClient interface {
@@ -44,23 +44,19 @@ func InitWebRtcClient(conf WebRTCConfig) (client *WebRTCClient, err error) {
 		return
 	}
 
-	thread.SafeThread(func() {
-		codec := conf.Sender.GetCodec()
-		if track, err := webrtc.NewTrackLocalStaticRTP(
-			webrtc.RTPCodecCapability{MimeType: codec},
-			fmt.Sprintf("%d", time.Now().UnixNano()),
-			fmt.Sprintf("%d", time.Now().UnixNano())); err != nil {
-		} else if err != nil {
-		} else if sender, err := client.conn.AddTrack(track); err != nil {
-		} else {
+	codec := conf.Sender.GetCodec()
+	if track, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: codec},
+		fmt.Sprintf("%d", time.Now().UnixNano()),
+		fmt.Sprintf("%d", time.Now().UnixNano())); err != nil {
+	} else if sender, err := client.conn.AddTrack(track); err != nil {
+	} else if offer, err := client.conn.CreateOffer(nil); err != nil {
+	} else if err = client.conn.SetLocalDescription(offer); err != nil {
+	} else {
+		thread.SafeThread(func() {
 			client.readLoopRTP(conf.Sender, track, sender)
-		}
-
-		if offer, err := client.conn.CreateOffer(nil); err != nil {
-		} else if err = client.conn.SetLocalDescription(offer); err != nil {
-		} else {
-		}
-	})
+		})
+	}
 
 	client.conn.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 	})
@@ -85,18 +81,16 @@ func InitWebRtcClient(conf WebRTCConfig) (client *WebRTCClient, err error) {
 		if raw, err := signaling.Recv(); err != nil {
 		} else if err = json.Unmarshal(raw, &message); err != nil {
 		} else {
-			candidate := webrtc.ICECandidateInit{}
-			answer := webrtc.SessionDescription{}
 			switch message.Event {
 			case "candidate":
-				if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
-					break
+				if candidate, ok := message.Data.(webrtc.ICECandidateInit); !ok {
+					// todo
 				} else if err := client.conn.AddICECandidate(candidate); err != nil {
 					break
 				}
 			case "answer":
-				if err := json.Unmarshal([]byte(message.Data), &answer); err != nil {
-					break
+				if answer, ok := message.Data.(webrtc.SessionDescription); !ok {
+					// todo
 				} else if err = client.conn.SetRemoteDescription(answer); err != nil {
 					break
 				}
@@ -140,7 +134,7 @@ func (client *WebRTCClient) readLoopRTP(
 			}
 
 			if IDR {
-				client.IDRhandler()
+				client.idr()
 			}
 		}
 	})
@@ -155,4 +149,8 @@ func (client *WebRTCClient) readLoopRTP(
 func (client *WebRTCClient) Close() {
 	client.conn.Close()
 	client.stop <- true
+}
+
+func (client *WebRTCClient) HandleIDR(fun func()) {
+	client.idr = fun
 }

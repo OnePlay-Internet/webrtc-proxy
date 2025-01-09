@@ -1,13 +1,17 @@
 package proxy
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	wbrtc "github.com/pion/webrtc/v4"
+	wrtc "github.com/pion/webrtc/v4"
 	"github.com/thinkonmay/thinkremote-rtchub/listener"
+	"github.com/thinkonmay/thinkremote-rtchub/util/turn"
 	"github.com/thinkonmay/thinkremote-rtchub/webrtc"
 )
 
@@ -22,6 +26,9 @@ type Proxy struct {
 
 	keymap map[string]listener.Listener
 	mut    *sync.Mutex
+
+	Mux  *http.ServeMux
+	turn *turn.TurnServer
 }
 
 type WSConn struct {
@@ -37,43 +44,92 @@ func (conn *WSConn) Recv() ([]byte, error) {
 func (conn *WSConn) Close() {
 }
 
-func InitWebRTCProxy() (*Proxy, error) {
+func InitWebRTCProxy(
+	mux *http.ServeMux,
+	config turn.TurnServerConfig,
+) (*Proxy, error) {
 	proxy := &Proxy{
 		stop: make(chan bool, 2),
 	}
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	if turn, err := turn.NewTurnServer(config); err != nil {
+		return nil, err
+	} else {
+		proxy.turn = turn
+	}
+
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		uid := ""
+		turn := turn.TurnRequest{
+			Username: uuid.NewString(),
+			Password: uuid.NewString(),
+		}
+
 		if listener, found := proxy.keymap[uid]; !found {
 		} else if conn, err := upgrader.Upgrade(w, r, nil); err != nil {
+		} else if err = conn.WriteJSON(webrtc.SignalingMessage{
+			Event: "open",
+			Data:  turn,
+		}); err != nil {
+		} else if err := proxy.turn.Open(turn); err != nil {
 		} else if webrtcClient, err := webrtc.InitWebRtcClient(webrtc.WebRTCConfig{
-			Ices:      []wbrtc.ICEServer{},
+			Ices: []wrtc.ICEServer{{
+				URLs: []string{fmt.Sprintf("stun:%s:%d", config.PublicIP, config.Port)},
+			}, {
+				URLs:           []string{fmt.Sprintf("turn:%s:%d", config.PublicIP, config.Port)},
+				Username:       turn.Username,
+				Credential:     turn.Password,
+				CredentialType: wrtc.ICECredentialTypePassword,
+			}},
 			Signaling: &WSConn{conn: conn},
 			Sender:    listener,
 		}); err != nil {
 		} else {
-			webrtcClient.IDRhandler = func() {
+			defer webrtcClient.Close()
+			defer proxy.turn.Close(turn.Username)
+			defer conn.Close()
+
+			webrtcClient.HandleIDR(func() {
 				listener.SendControlMsg([]byte{})
+			})
+
+			typ, dat, err := 0, []byte{}, (error)(nil)
+			for err == nil {
+				if typ, dat, err = conn.ReadMessage(); err != nil {
+				} else if typ != websocket.BinaryMessage {
+				} else {
+					listener.SendControlMsg(dat)
+				}
 			}
+
+			conn.WriteJSON(webrtc.SignalingMessage{
+				Event: "close",
+				Data:  err.Error(),
+			})
 		}
 	})
 
-	http.HandleFunc("/listeners/new", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/listeners/new", func(w http.ResponseWriter, r *http.Request) {
+		body := struct{ Codec string }{}
 		uid := uuid.NewString()
-		if listener, err := UDPListener("h264"); err != nil {
+		if dat, err := io.ReadAll(r.Body); err != nil {
+		} else if err := json.Unmarshal(dat, &body); err != nil {
+		} else if listener, err := UDPListener(body.Codec); err != nil {
 		} else {
 			proxy.mut.Lock()
 			defer proxy.mut.Unlock()
 
 			proxy.keymap[uid] = listener
+			w.Write([]byte(uid))
 		}
 	})
 
-	http.HandleFunc("/listeners/close", func(w http.ResponseWriter, r *http.Request) {
-		uid := ""
+	mux.HandleFunc("/listeners/close", func(w http.ResponseWriter, r *http.Request) {
 		proxy.mut.Lock()
 		defer proxy.mut.Unlock()
-		if listener, found := proxy.keymap[uid]; !found {
+
+		if data, err := io.ReadAll(r.Body); err != nil {
+		} else if listener, found := proxy.keymap[string(data)]; !found {
 		} else {
 			listener.Close()
 		}
@@ -83,4 +139,5 @@ func InitWebRTCProxy() (*Proxy, error) {
 }
 
 func (prox *Proxy) Stop() {
+
 }

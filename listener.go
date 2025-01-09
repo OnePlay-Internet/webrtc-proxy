@@ -11,6 +11,8 @@ import (
 	"github.com/thinkonmay/thinkremote-rtchub/listener/multiplexer"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/bits"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/h264"
+	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/h265"
+	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/opus"
 	"github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/wrapper"
 	"github.com/thinkonmay/thinkremote-rtchub/util/thread"
 )
@@ -18,57 +20,71 @@ import (
 type VideoPipeline struct {
 	closed chan bool
 
+	port        int
 	clockRate   float64
 	codec       string
 	multiplexer *multiplexer.Multiplexer
+
+	pc net.PacketConn
 }
 
 func UDPListener(codec string) (listener.Listener, error) {
 	packetizer := wrapper.PacketizerWrapper{
-		Fun: h264.RTPPay,
-
+		Fun:       h264.RTPPay,
 		Timestamp: randutil.NewMathRandomGenerator().Uint32(),
 		MTU:       1400,
 	}
 
-	port, err := getFreePort()
-	if err != nil {
-		return nil, err
-	}
-
 	pipeline := &VideoPipeline{
-		codec: webrtc.MimeTypeH264,
-
+		codec:       webrtc.MimeTypeH264,
 		closed:      make(chan bool, 2),
 		clockRate:   90000,
-		multiplexer: multiplexer.NewMultiplexer("video", &packetizer),
+		multiplexer: multiplexer.NewMultiplexer(&packetizer),
 	}
 
-	pc, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
-	if err != nil {
+	switch codec {
+	case "h264":
+		packetizer.Fun = h264.RTPPay
+		pipeline.codec = webrtc.MimeTypeH264
+	case "h265":
+		packetizer.Fun = h265.SafariPay
+		pipeline.codec = webrtc.MimeTypeH265
+	case "opus":
+		pipeline.multiplexer = multiplexer.NewMultiplexer(opus.NewOpusPayloader())
+		pipeline.codec = webrtc.MimeTypeOpus
+	}
+
+	if port, err := getFreePort(); err != nil {
 		return nil, err
+	} else if pc, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port)); err != nil {
+		return nil, err
+	} else {
+		pipeline.port = port
+		pipeline.pc = pc
 	}
 
 	buf := make([]byte, 1024*1024*10)
 	firsttime := true
 	thread.HighPriorityLoop(pipeline.closed, func() {
-		if n, _, err := pc.ReadFrom(buf); err != nil {
+		if n, _, err := pipeline.pc.ReadFrom(buf); err != nil {
+		} else {
 			reader := bits.NewReader(buf[:n])
 			sample := reader.ReadUint32()
 			pipeline.multiplexer.Send(reader.Left(), sample)
+			if firsttime {
+				fmt.Println("capturing video")
+				firsttime = false
+			}
 		}
-
-		if firsttime {
-			fmt.Println("capturing video")
-			firsttime = false
-		}
-
 	})
 	return pipeline, nil
 }
 
 func (p *VideoPipeline) GetCodec() string {
 	return p.codec
+}
+func (p *VideoPipeline) GetPort() int {
+	return p.port
 }
 
 func (p *VideoPipeline) Close() {
