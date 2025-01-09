@@ -59,13 +59,13 @@ func InitWebRTCProxy(
 	}
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		uid := ""
 		turn := turn.TurnRequest{
 			Username: uuid.NewString(),
 			Password: uuid.NewString(),
 		}
 
-		if listener, found := proxy.keymap[uid]; !found {
+		if uids, found := r.Header["credential"]; !found || len(uids) == 0 {
+		} else if listener, found := proxy.keymap[uids[0]]; !found {
 		} else if conn, err := upgrader.Upgrade(w, r, nil); err != nil {
 		} else if err = conn.WriteJSON(webrtc.SignalingMessage{
 			Event: "open",
