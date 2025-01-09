@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/pion/randutil"
 	"github.com/pion/rtp"
@@ -17,7 +18,7 @@ import (
 	"github.com/thinkonmay/thinkremote-rtchub/util/thread"
 )
 
-type VideoPipeline struct {
+type udpListener struct {
 	closed chan bool
 
 	port        int
@@ -25,7 +26,9 @@ type VideoPipeline struct {
 	codec       string
 	multiplexer *multiplexer.Multiplexer
 
-	pc net.PacketConn
+	pc             net.PacketConn
+	controlChannel chan []byte
+	addr           net.Addr
 }
 
 func UDPListener(codec string) (listener.Listener, error) {
@@ -35,7 +38,7 @@ func UDPListener(codec string) (listener.Listener, error) {
 		MTU:       1400,
 	}
 
-	pipeline := &VideoPipeline{
+	pipeline := &udpListener{
 		codec:       webrtc.MimeTypeH264,
 		closed:      make(chan bool, 2),
 		clockRate:   90000,
@@ -63,39 +66,56 @@ func UDPListener(codec string) (listener.Listener, error) {
 		pipeline.pc = pc
 	}
 
+	_firsttime := true
+	firsttime  := func() {
+		if _firsttime {
+			fmt.Println("capturing udp")
+			_firsttime = false
+		}
+	}
+
 	buf := make([]byte, 1024*1024*10)
-	firsttime := true
 	thread.HighPriorityLoop(pipeline.closed, func() {
-		if n, _, err := pipeline.pc.ReadFrom(buf); err != nil {
+		if n, addr, err := pipeline.pc.ReadFrom(buf); err != nil {
 		} else {
 			reader := bits.NewReader(buf[:n])
 			sample := reader.ReadUint32()
 			pipeline.multiplexer.Send(reader.Left(), sample)
-			if firsttime {
-				fmt.Println("capturing video")
-				firsttime = false
+			pipeline.addr = addr
+			firsttime()
+		}
+	})
+
+	ticker := time.NewTicker(time.Second)
+	thread.HighPriorityLoop(pipeline.closed, func() {
+		select {
+		case <-ticker.C:
+		case dat := <-pipeline.controlChannel:
+			if pipeline.addr != nil {
+			} else if _, err := pipeline.pc.WriteTo(dat, pipeline.addr); err != nil {
 			}
 		}
 	})
+
 	return pipeline, nil
 }
 
-func (p *VideoPipeline) GetCodec() string {
+func (p *udpListener) GetCodec() string {
 	return p.codec
 }
-func (p *VideoPipeline) GetPort() int {
+func (p *udpListener) GetPort() int {
 	return p.port
 }
 
-func (p *VideoPipeline) Close() {
+func (p *udpListener) Close() {
 	thread.TriggerStop(p.closed)
 }
 
-func (p *VideoPipeline) RegisterRTPHandler(id string, fun func(pkt *rtp.Packet)) {
+func (p *udpListener) RegisterRTPHandler(id string, fun func(pkt *rtp.Packet)) {
 	p.multiplexer.RegisterRTPHandler(id, fun)
 }
 
-func (p *VideoPipeline) DeregisterRTPHandler(id string) {
+func (p *udpListener) DeregisterRTPHandler(id string) {
 	p.multiplexer.DeregisterRTPHandler(id)
 }
 
@@ -109,6 +129,6 @@ func getFreePort() (port int, err error) {
 	return
 }
 
-func (p *VideoPipeline) SendControlMsg([]byte) {
-	return
+func (p *udpListener) SendControlMsg(data []byte) {
+	p.controlChannel <- data
 }
