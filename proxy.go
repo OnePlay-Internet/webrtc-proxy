@@ -21,11 +21,16 @@ var (
 	}
 )
 
+type Session struct {
+	RemoteAddr string `json:"remoteAddr"`
+}
+
 type Proxy struct {
 	stop chan bool
 
-	keymap map[string]listener.Listener
-	mut    *sync.Mutex
+	sessions []*Session
+	keymap   map[string]listener.Listener
+	mut      *sync.Mutex
 
 	Mux  *http.ServeMux
 	turn *turn.TurnServer
@@ -49,7 +54,10 @@ func InitWebRTCProxy(
 	config turn.TurnServerConfig,
 ) (*Proxy, error) {
 	proxy := &Proxy{
-		stop: make(chan bool, 2),
+		stop:     make(chan bool, 2),
+		keymap:   map[string]listener.Listener{},
+		mut:      &sync.Mutex{},
+		sessions: []*Session{},
 	}
 
 	if turn, err := turn.NewTurnServer(config); err != nil {
@@ -65,13 +73,23 @@ func InitWebRTCProxy(
 		}
 
 		if uids, found := r.Header["credential"]; !found || len(uids) == 0 {
+			w.WriteHeader(400)
+			w.Write([]byte("no credential header available"))
 		} else if listener, found := proxy.keymap[uids[0]]; !found {
+			w.WriteHeader(400)
+			w.Write([]byte("invalid key"))
 		} else if conn, err := upgrader.Upgrade(w, r, nil); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if err = conn.WriteJSON(webrtc.SignalingMessage{
 			Event: "open",
 			Data:  turn,
 		}); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if err := proxy.turn.Open(turn); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if webrtcClient, err := webrtc.InitWebRtcClient(webrtc.WebRTCConfig{
 			Ices: []wrtc.ICEServer{{
 				URLs: []string{fmt.Sprintf("stun:%s:%d", config.PublicIP, config.Port)},
@@ -84,10 +102,16 @@ func InitWebRTCProxy(
 			Signaling: &WSConn{conn: conn},
 			Sender:    listener,
 		}); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else {
 			defer webrtcClient.Close()
 			defer proxy.turn.Close(turn.Username)
 			defer conn.Close()
+
+			proxy.sessions = append(proxy.sessions, &Session{
+				RemoteAddr: r.RemoteAddr,
+			})
 
 			webrtcClient.HandleIDR(func() {
 				listener.SendControlMsg([]byte{})
@@ -113,25 +137,52 @@ func InitWebRTCProxy(
 		body := struct{ Codec string }{}
 		uid := uuid.NewString()
 		if dat, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if err := json.Unmarshal(dat, &body); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if listener, err := UDPListener(body.Codec); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
+		} else if data, err := json.Marshal(map[string]interface{}{
+			"port": listener.GetPort(),
+			"codec": listener.GetCodec(),
+		}); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else {
 			proxy.mut.Lock()
 			defer proxy.mut.Unlock()
 
 			proxy.keymap[uid] = listener
-			w.Write([]byte(uid))
+			w.WriteHeader(200)
+			w.Write(data)
 		}
 	})
 
 	mux.HandleFunc("/listeners/close", func(w http.ResponseWriter, r *http.Request) {
 		proxy.mut.Lock()
 		defer proxy.mut.Unlock()
-
 		if data, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
 		} else if listener, found := proxy.keymap[string(data)]; !found {
+			w.WriteHeader(400)
+			w.Write([]byte("listener not found"))
 		} else {
 			listener.Close()
+			delete(proxy.keymap, string(data))
+		}
+	})
+
+	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if data, err := json.Marshal(proxy.sessions); err != nil {
+			w.WriteHeader(400)
+			w.Write([]byte(err.Error()))
+		} else {
+			w.WriteHeader(200)
+			w.Write(data)
 		}
 	})
 
@@ -139,5 +190,10 @@ func InitWebRTCProxy(
 }
 
 func (prox *Proxy) Stop() {
+	prox.mut.Lock()
+	defer prox.mut.Unlock()
 
+	for _, prox := range prox.keymap {
+		prox.Close()
+	}
 }

@@ -1,6 +1,6 @@
 package h265
 
-import "github.com/thinkonmay/thinkremote-rtchub/listener/rtppay\h264"
+import "github.com/thinkonmay/thinkremote-rtchub/listener/rtppay/h264"
 
 const forbiddenZeroBit = 0x80
 const nalUnitType = 0x3F

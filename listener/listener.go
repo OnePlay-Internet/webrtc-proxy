@@ -6,6 +6,7 @@ import (
 
 type Listener interface {
 	GetCodec() string
+	GetPort() int
 
 	RegisterRTPHandler(string, func(*rtp.Packet))
 	DeregisterRTPHandler(string)

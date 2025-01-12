@@ -48,9 +48,9 @@ func NewTurnServer(config TurnServerConfig) (*TurnServer, error) {
 	thread.SafeThread(func() {
 		_sessions := map[string]string{}
 		if bytes, err := os.ReadFile(config.Path); err != nil {
-			fmt.Printf("failed to read turn.json file %s", err.Error())
+			fmt.Printf("failed to read turn.json file %s\n", err.Error())
 		} else if err := json.Unmarshal(bytes, &_sessions); err != nil {
-			fmt.Printf("failed to decode turn.json file %s", err.Error())
+			fmt.Printf("failed to decode turn.json file %s\n", err.Error())
 		} else {
 			for key, ss := range _sessions {
 				if out, err := base64.RawStdEncoding.DecodeString(ss); err != nil {
