@@ -8,6 +8,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/thinkonmay/thinkremote-rtchub/broadcaster"
 	"github.com/thinkonmay/thinkremote-rtchub/listener"
 	"github.com/thinkonmay/thinkremote-rtchub/util/thread"
 )
@@ -16,12 +17,37 @@ type WebRTCClient struct {
 	conn *webrtc.PeerConnection
 	idr  func()
 	stop chan bool
+
+	chann chan *rtp.Packet
+}
+
+// Configure implements broadcaster.Broadcaster.
+func (client *WebRTCClient) Configure(list listener.Listener) error {
+	codec := list.GetCodec()
+	if track, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: codec},
+		fmt.Sprintf("%d", time.Now().UnixNano()),
+		fmt.Sprintf("%d", time.Now().UnixNano())); err != nil {
+	} else if sender, err := client.conn.AddTrack(track); err != nil {
+	} else if offer, err := client.conn.CreateOffer(nil); err != nil {
+	} else if err = client.conn.SetLocalDescription(offer); err != nil {
+	} else {
+		thread.SafeThread(func() {
+			client.readLoopRTP(track, sender)
+		})
+	}
+
+	return nil
+}
+
+// SendRTPPacket implements broadcaster.Broadcaster.
+func (client *WebRTCClient) SendRTPPacket(pkt *rtp.Packet) {
+	client.chann <- pkt
 }
 
 type WebRTCConfig struct {
 	Ices      []webrtc.ICEServer
 	Signaling SignalingClient
-	Sender    listener.Listener
 }
 
 type SignalingMessage struct {
@@ -35,27 +61,14 @@ type SignalingClient interface {
 	Close()
 }
 
-func InitWebRtcClient(conf WebRTCConfig) (client *WebRTCClient, err error) {
-	client = &WebRTCClient{}
+func InitWebRtcClient(conf WebRTCConfig) (broadcaster.Broadcaster, error) {
+	var err error
+	client := &WebRTCClient{}
 	signaling := conf.Signaling
 	if client.conn, err = webrtc.NewPeerConnection(webrtc.Configuration{
 		ICEServers: conf.Ices,
 	}); err != nil {
-		return
-	}
-
-	codec := conf.Sender.GetCodec()
-	if track, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: codec},
-		fmt.Sprintf("%d", time.Now().UnixNano()),
-		fmt.Sprintf("%d", time.Now().UnixNano())); err != nil {
-	} else if sender, err := client.conn.AddTrack(track); err != nil {
-	} else if offer, err := client.conn.CreateOffer(nil); err != nil {
-	} else if err = client.conn.SetLocalDescription(offer); err != nil {
-	} else {
-		thread.SafeThread(func() {
-			client.readLoopRTP(conf.Sender, track, sender)
-		})
+		return nil, err
 	}
 
 	client.conn.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
@@ -98,19 +111,22 @@ func InitWebRtcClient(conf WebRTCConfig) (client *WebRTCClient, err error) {
 			}
 		}
 	})
-	return
+
+	return client, nil
 }
 
 func (client *WebRTCClient) readLoopRTP(
-	listener listener.Listener,
 	track *webrtc.TrackLocalStaticRTP,
 	sender *webrtc.RTPSender,
 ) {
-
-	id := track.ID()
-	listener.RegisterRTPHandler(id, func(pk *rtp.Packet) {
-		if err := track.WriteRTP(pk); err != nil {
-			fmt.Printf("failed to send rtp %s", err.Error())
+	thread.HighPriorityLoop(client.stop, func() {
+		select {
+		case pkt := <-client.chann:
+			if err := track.WriteRTP(pkt); err != nil {
+				fmt.Printf("failed to send rtp %s", err.Error())
+			}
+		case <-client.stop:
+			break
 		}
 	})
 
@@ -142,7 +158,6 @@ func (client *WebRTCClient) readLoopRTP(
 	thread.SafeThread(func() {
 		<-client.stop
 		thread.TriggerStop(client.stop)
-		listener.DeregisterRTPHandler(id)
 	})
 }
 
@@ -151,6 +166,6 @@ func (client *WebRTCClient) Close() {
 	client.stop <- true
 }
 
-func (client *WebRTCClient) HandleIDR(fun func()) {
+func (client *WebRTCClient) OnIDR(fun func()) {
 	client.idr = fun
 }

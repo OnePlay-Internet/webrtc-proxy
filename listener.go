@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pion/randutil"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -67,7 +68,7 @@ func UDPListener(codec string) (listener.Listener, error) {
 	}
 
 	_firsttime := true
-	firsttime  := func() {
+	firsttime := func() {
 		if _firsttime {
 			fmt.Println("capturing udp")
 			_firsttime = false
@@ -111,8 +112,10 @@ func (p *udpListener) Close() {
 	thread.TriggerStop(p.closed)
 }
 
-func (p *udpListener) RegisterRTPHandler(id string, fun func(pkt *rtp.Packet)) {
+func (p *udpListener) RegisterRTPHandler(fun func(pkt *rtp.Packet)) string {
+	id := uuid.NewString()
 	p.multiplexer.RegisterRTPHandler(id, fun)
+	return id
 }
 
 func (p *udpListener) DeregisterRTPHandler(id string) {

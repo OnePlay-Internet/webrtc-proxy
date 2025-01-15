@@ -8,7 +8,7 @@ type Listener interface {
 	GetCodec() string
 	GetPort() int
 
-	RegisterRTPHandler(string, func(*rtp.Packet))
+	RegisterRTPHandler(func(*rtp.Packet)) string
 	DeregisterRTPHandler(string)
 	SendControlMsg([]byte)
 
